@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         BigSeller 产品名称简体→繁体 & 清空短描述 & 裁剪长描述图片 (Alt+T / 按钮 / 菜单)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  在 BigSeller 抓取页面中，一键完成：产品名称简体→繁体（英文不变）、清空“短描述”，并在“长描述”中只保留前12张图片。
+// @version      1.2
+// @description  在 BigSeller 抓取页面中，一键完成：产品名称简体→繁体（英文品牌大写且无空格，紧贴中文）、清空“短描述”，并在“长描述”中只保留前12张图片。
 // @match        https://www.bigseller.pro/web/crawl/index.htm*
 // @require      https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/cn2t.js
 // @grant        GM_registerMenuCommand
@@ -20,76 +20,182 @@
         return converter(text);
     }
 
-    // ====== 产品标题中文分块 ======
+    // ====== 产品标题中文分块（改进版）======
 
     function isChineseChar(ch) {
         return /[\u4E00-\u9FFF]/.test(ch);
     }
 
+    /**
+     * 按规则拆分纯中文片段：
+     * - 只接受所有段长都在 [4, 8] 的拆分方案；
+     * - 优先使用更长的段（8 → 7 → 6 → 5 → 4），避免乱切短词；
+     * - 如果拆不干净，就完全不拆，返回原片段；
+     * - 针对常见彩妆后缀（唇彩、唇釉、彩妝等），尽量并入前一个段，但并入后也必须 ≤ 8。
+     */
     function chunkChineseSegment(seg) {
         const chars = Array.from(seg);
-        const chunks = [];
-        const PRODUCT_SUFFIXES = [
-            '口红', '口紅', '唇彩', '唇釉', '唇膏',
-            '粉底液', '粉底膏', '粉饼', '粉餅', '气垫', '氣墊',
-            '腮红', '腮紅', '遮瑕', '遮瑕膏',
-            '睫毛膏', '眉笔', '眉筆', '眼线笔', '眼線筆',
-            '彩妆', '彩妝'
+        const n = chars.length;
+
+        // 词典：可根据需要不断扩充，所有在这里的词在分块时会被视为一个整体，不会被拆开
+        const WORD_DICT = [
+            // 核心产品类别
+            '眼線液筆', '眼線筆',
+            '高光粉', '高光盤',
+            '修容盤', '修容粉',
+            '腮紅', '腮紅盤',
+            '口紅', '唇彩', '唇釉', '唇膏', '唇蜜',
+            '粉底液', '粉底膏', '粉餅', '氣墊',
+            '遮瑕', '遮瑕膏',
+            '睫毛膏', '眉筆',
+            '眼影盤', '眼影筆',
+            '定妝噴霧', '定妝粉',
+            '玻璃唇',
+            '化妝品', '彩妝', '美妝', '美妝蛋',
+            '粉撲', '化妝刷', '美妝工具',
+
+            // 常见修饰/营销词（可持续补充）
+            '水光', '潤透', '顯白', '秋冬', '韓系', '裸妝', '氛圍感', '元氣', '清透', '低飽和', '素顏',
+            '嘟嘟唇', '元氣感', '日常妝', '偽素顏',
+            '小熊', '奶萌', '獨角獸'
         ];
 
-        let i = 0;
-        while (i < chars.length) {
-            const remaining = chars.length - i;
-            let size;
-            if (remaining <= 6) {
-                size = remaining; // 最后不足 6 个就全部一块
-            } else {
-                // 默认 4 个一组，避免最后只剩 1 个字符
-                if (remaining - 4 === 1) {
-                    size = 5;
-                } else if (remaining - 4 === 2) {
-                    if (remaining - 6 >= 3) {
-                        size = 6;
-                    } else {
-                        size = 4;
-                    }
-                } else {
-                    size = 4;
-                }
-            }
+        const WORD_SET = new Set(WORD_DICT);
+        const MAX_WORD_LEN = WORD_DICT.reduce((m, w) => Math.max(m, w.length), 1);
 
-            // 如果下一个 2 字刚好是产品名后缀，就把它们一起并入当前块
-            if (i + size + 2 <= chars.length) {
-                const maybeSuffix = chars.slice(i + size, i + size + 2).join('');
-                if (PRODUCT_SUFFIXES.includes(maybeSuffix)) {
-                    size += 2;
-                }
-            }
-
-            chunks.push(chars.slice(i, i + size).join(''));
-            i += size;
+        // 整体长度 ≤ 8：直接不拆
+        if (n <= 8) {
+            return [seg];
         }
-        return chunks;
+
+        // 把纯中文串先按词典切成 token（最长优先），剩余的按单字处理
+        function tokenizeChinese() {
+            const tokens = [];
+            let i = 0;
+            while (i < n) {
+                let matched = null;
+                const maxLen = Math.min(MAX_WORD_LEN, n - i);
+                for (let len = maxLen; len >= 2; len--) {
+                    const slice = chars.slice(i, i + len).join('');
+                    if (WORD_SET.has(slice)) {
+                        matched = slice;
+                        break;
+                    }
+                }
+                if (matched) {
+                    tokens.push(matched);
+                    i += matched.length;
+                } else {
+                    // 不在词典里的字，作为单字 token
+                    tokens.push(chars[i]);
+                    i += 1;
+                }
+            }
+            return tokens;
+        }
+
+        const tokens = tokenizeChinese();
+        const tokenLens = tokens.map(t => Array.from(t).length);
+        const totalLen = tokenLens.reduce((a, b) => a + b, 0);
+
+        // 再次保护：总长≤8就不拆
+        if (totalLen <= 8) {
+            return [seg];
+        }
+
+        // 尝试在 token 级别上分块：
+        // 1) 第一轮要求所有块长度在 [4,8]
+        // 2) 如果失败，第二轮允许“最后一块”长度在 [1,8]，其它块仍然 [4,8]
+        function tryPartition(allowLastShort) {
+            const memo = new Map();
+
+            function dfs(index) {
+                if (index === tokens.length) return [];
+                const key = index + '|' + (allowLastShort ? '1' : '0');
+                if (memo.has(key)) return memo.get(key);
+
+                let best = null;
+                // 从当前 token 开始，累积组成一块
+                for (let end = index; end < tokens.length; end++) {
+                    const len = tokenLens.slice(index, end + 1).reduce((a, b) => a + b, 0);
+                    if (len > 8) break; // 超过 8 必须停
+
+                    const isLastGroup = (end === tokens.length - 1);
+
+                    if (!isLastGroup) {
+                        // 非最后一块：长度必须在 [4,8]
+                        if (len < 4) continue;
+                    } else {
+                        // 最后一块：
+                        // - allowLastShort = false 时，也要求 [4,8]
+                        // - allowLastShort = true 时，允许 [1,8]
+                        if (!allowLastShort && len < 4) continue;
+                        if (len < 1) continue; // 理论上不会发生
+                    }
+
+                    const rest = dfs(end + 1);
+                    if (rest !== null) {
+                        const group = tokens.slice(index, end + 1).join('');
+                        best = [group, ...rest];
+                        break; // 先找到的就是最“靠前”的分法
+                    }
+                }
+
+                if (best === null) {
+                    memo.set(key, null);
+                    return null;
+                }
+                memo.set(key, best);
+                return best;
+            }
+
+            return dfs(0);
+        }
+
+        let segments = tryPartition(false);
+        if (!segments) {
+            segments = tryPartition(true);
+        }
+
+        // 如果连放宽最后一块都分不出来一个合法方案，就不拆
+        if (!segments) {
+            return [seg];
+        }
+
+        return segments;
     }
 
+    /**
+     * 标题智能分块：
+     * - 把最前面的英文品牌提取出来：只要是以字母开头的连续 A-Z0-9/&/-/空格；
+     * - 品牌：转为全大写，并去掉内部所有空格；
+     * - 剩余部分按“中文 vs 其它”分组：
+     *   - 中文组交给 chunkChineseSegment 拆分；
+     *   - 非中文组只做 trim；
+     * - 中文/非中文段之间用一个空格拼接；
+     * - 最终品牌与第一个中文段之间【不加空格】。
+     */
     function smartSpaceChinese(title) {
         if (!title) return '';
         const trimmed = title.trim();
 
-        // 把前面的英文品牌单独拿出来（例如 CAPPUVINI）
+        // 提取前面的英文品牌（字母 / 数字 / 空格 / & / -）
         let brand = '';
         let rest = trimmed;
         const brandMatch = trimmed.match(/^[A-Za-z][A-Za-z0-9\s&-]*/);
+
         if (brandMatch) {
-            brand = brandMatch[0].trim();
+            // 品牌：全部大写 + 去掉内部空格
+            brand = brandMatch[0].replace(/\s+/g, '').toUpperCase();
             rest = trimmed.slice(brandMatch[0].length);
         }
 
-        const tokens = [];
-        if (brand) tokens.push(brand);
+        // 关键改动：去掉剩余部分里的所有空格，避免在中文中间硬切
+        rest = rest.replace(/\s+/g, '');
 
+        const tokens = [];
         let buffer = '';
-        let currentType = null; // 'C' (Chinese) or 'O' (Other)
+        let currentType = null; // 'C'（中文）或 'O'（其它）
 
         function flush() {
             if (!buffer) return;
@@ -105,10 +211,6 @@
         }
 
         for (const ch of rest) {
-            if (ch === ' ') {
-                flush();
-                continue;
-            }
             const type = isChineseChar(ch) ? 'C' : 'O';
             if (currentType && type !== currentType) {
                 flush();
@@ -118,8 +220,21 @@
         }
         flush();
 
-        return tokens.filter(Boolean).join(' ');
+        // 中文 / 其它段之间用空格
+        const chinesePart = tokens.filter(Boolean).join(' ');
+
+        // 最终组合：
+        // - 品牌：全大写+无内部空格
+        // - 品牌和第一个中文段之间【不加空格】
+        if (brand) {
+            if (chinesePart) {
+                return brand + chinesePart; // 例如：DHDH速描優美眼線液筆
+            }
+            return brand;
+        }
+        return chinesePart;
     }
+
 
     // 根据 BigSeller 的结构，通过 "page_edit_item" + 内部的 .title 文本来定位整个字段块
     function findItemByTitle(labelText) {
@@ -140,7 +255,7 @@
         if (!item) return null;
         const content = item.querySelector('div.content') || item;
 
-        // 优先 textarea（短描述就是 textarea.product_desc）
+        // 优先 textarea
         let field = content.querySelector('textarea');
         if (field) return field;
 
@@ -292,5 +407,5 @@
         GM_registerMenuCommand('BigSeller 一键：标题繁体 + 清空短描述 + 长描述限12图', processAll);
     }
 
-    console.log('[BigSeller CN→TW One-Click v1.0] Alt+T / 按钮 / 菜单 已加载');
+    console.log('[BigSeller CN→TW One-Click v1.2] Alt+T / 按钮 / 菜单 已加载');
 })();
