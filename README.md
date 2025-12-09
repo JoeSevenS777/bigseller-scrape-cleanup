@@ -1,145 +1,177 @@
-BigSeller 抓取页：产品名称简体→繁体 + 清空短描述 + 长描限 12 图
-==============================================================
+BigSeller CN→TW Auto-Formatter
+Tampermonkey Userscript for Product Title Cleanup, Traditional Chinese Conversion, and Description Optimization
+Overview
 
-Tampermonkey 用户脚本，用于在 BigSeller「抓取页面」上，一键整理刚抓取到的商品数据：
+This userscript automates BigSeller’s product-editing page (抓取页面), performing three tasks in a single click:
 
-- 标题：简体 → 繁体（台湾）+ 智能中文分块
-- 短描述：直接清空
-- 长描述：只保留前 12 张图片
+Convert product titles from Simplified → Traditional Chinese (Taiwan)
 
-脚本目标是让抓取来的商品在进入编辑流程之前先变得干净、规范、易读，从而减少后期手动整理的时间。
+Intelligently re-format Chinese titles through brand recognition, segmentation, and a large dictionary
 
---------------------------------------------------------------
-功能概览
---------------------------------------------------------------
+Clean up product descriptions
 
-运行后会执行以下操作：
+Clear “Short Description”
 
-1. 产品名称处理
-   - OpenCC 简体→繁体（台湾）
-   - 英文品牌统一大写 + 去空格
-   - 中文部分执行智能分块：
-       • 块长固定在 4–8 汉字
-       • 品类词（如粉底液、腮紅、高光粉等）必须放在所在块的末尾
-       • 利用词典避免拆开常见词（如清透無暇、奶油肌、膨脹色等）
+Limit “Long Description” to the first 12 images
 
-2. 短描述
-   - 完全清空字段内容
-   - 触发 input + change 事件同步前端状态
+This improves listing efficiency, enforces consistent formatting, and reduces manual editing when preparing products for cross-border e-commerce platforms like Shopee/Lazada.
 
-3. 长描述
-   - 识别 contenteditable 或 iframe 富文本区域
-   - 保留前 12 张图片，其余全部删除
-   - 触发 input + change
+Features
+1. Title Conversion
 
-4. 触发方式
-   - Alt + T 快捷键
-   - 悬浮按钮：标题繁体 + 清短描 + 长描限12图
-   - Tampermonkey 菜单：BigSeller 一键整理
+Uses OpenCC (cn2tw) to convert all Simplified Chinese to Traditional Chinese (Taiwan standard).
 
---------------------------------------------------------------
-安装方法
---------------------------------------------------------------
+English brand detection:
 
-1. 安装 Tampermonkey 插件
-2. 创建新用户脚本并粘贴仓库中的 `.user.js` 内容
-3. 打开 BigSeller 抓取页面：
-   https://www.bigseller.pro/web/crawl/index.htm*
-4. 按 Alt + T 或点击悬浮按钮运行脚本
+Extracts leading A–Z / 0–9 / & -
 
---------------------------------------------------------------
-标题分块逻辑（核心）
---------------------------------------------------------------
+Converts brand to uppercase
 
-标题处理分两部分：
+Removes internal brand spaces
 
---------------------------------------------------------------
-(1) 英文品牌识别
---------------------------------------------------------------
+Joins brand directly with the Chinese portion (no space)
 
-脚本会从标题开头提取英文品牌部分（字母 + 数字 + 空格 + & + -）。
+2. Chinese Title Smart-Segmentation
 
-处理方式：
+The script includes a large Traditional Chinese cosmetic vocabulary to ensure product titles are split into meaningful chunks.
 
-- 全部转为大写
-- 删除内部所有空格
-- 与第一个中文片段之间不加空格
+Key rules:
 
-例如：
-  “Leeinto 小心思寻梦高光粉” → “LEEINTO小心思尋夢高光粉”
+● Tokenization
 
---------------------------------------------------------------
-(2) 中文智能分块（chunkChineseSegment）
---------------------------------------------------------------
+Uses dictionary-based longest-match segmentation
 
-中文片段按以下流程处理：
+Dictionary now includes >150 beauty-related words:
 
-1. 词典（WORD_DICT）驱动的最长优先分词：
-   - 包含产品类别词、常见修饰词、品牌词、流行短语等。
-   - 可持续扩充。
-   - 未命中词典的汉字将作为单字 token 处理。
+Categories (腮紅棒 / 假睫毛 / 遮瑕液 / 修容粉...)
 
-2. 类别规则（CATEGORY_TERMS）：
-   - 若一个块内含有类别词，则该块的最后一个 token 必须是类别词。
-   - 例：
-       • “自然透潤修容棒” ✔
-       • “修容棒自然透潤” ✘（类别不能在中间）
+Textures (啞光 / 絲絨 / 水光 / 柔霧...)
 
-3. 分块规则：
-   - 每块长度必须在 4–8 个汉字之间。
-   - 第一轮要求所有块均满足 4–8 字。
-   - 若失败，则允许最后一块在 1–8 字之间。
-   - 若两轮都失败，则保持原句，不做拆分。
+Marketing terms (元氣感 / 淡顏 / 不易暈染 / 不飛粉...)
 
-4. 搜索策略：
-   - 对每个起点收集所有合法候选块。
-   - 按长度从大到小排序（8 → 7 → 6 → 5 → 4）。
-   - 使用 DFS 尝试构造一个完整覆盖的合法分块方案。
+Trend styling (貓精靈 / 魚尾 / 寬梗魚尾 / 山茶花 / 太陽花...)
 
-这样可确保：
+Phrase patterns (懶人三部曲 / 分段式 / 淺色系 / 提亮棒...)
 
-- 尽量使用更长、更语义一致的片段
-- 品类词始终放在所在片段的末尾
-- 词典中存在的词不会被拆开
-- 不会出现奇怪的分割（例如：“清透 無 暇”）
+And newly added: 富家千金, 免膠免卸, 自黏
 
---------------------------------------------------------------
-词典维护
---------------------------------------------------------------
+● Segmentation Rules
 
-为了让脚本越来越智能，需要按需求持续扩充：
+Chinese chunks must be 4–8 characters where possible
 
-1. WORD_DICT：原子词
-   - 品类词（粉底液、腮红棒、假睫毛等）
-   - 修饰词（清透無暇、奶油肌、膨脹色等）
-   - 品牌词（莎琪諾、花印紀花愛、卡泡維妮等）
-   - 流行短语（歐美、混血感、日雜等）
+Category words must appear at the end of their block
 
-   词典越完整，脚本分块效果越好。
+If no valid segmentation is found → return original text
 
-2. CATEGORY_TERMS：类别词
-   - 指必须出现在一个块末尾的产品类型。
-   - 若你遇到新的品类（如“斑點淚痣筆”、“腮紅棒”等），应同时加入此列表。
+Numbers automatically merge:
 
---------------------------------------------------------------
-限制说明
---------------------------------------------------------------
+10 + 色盤 → 10色盤
 
-本脚本专为 BigSeller 抓取页（crawl 页面）设计，对美妆类标题最为有效。
+10 + 排免卸自 → 10排免卸自
 
-若你遇到不理想的拆分：
+● Example
 
-- 记录原始标题与拆分结果
-- 找出需要加入词典的新词
-- 更新 WORD_DICT 和（若适用）CATEGORY_TERMS
+Input:
 
-脚本会随着词典不断扩展而变得愈加准确。
+SWEETMINT十色調色唇凍盤自然滋潤不易沾杯鏡面口紅唇釉10色盤
 
---------------------------------------------------------------
-开发信息
---------------------------------------------------------------
 
-- 使用 opencc-js 进行简体→繁体转换
-- Tampermonkey 环境
-- 主逻辑使用 token 分词 + DFS 分块 + 类别约束
+Output:
 
+SWEETMINT十色調色唇凍盤 自然滋潤 不易沾杯 鏡面口紅唇釉 10色盤
+
+3. Description Optimization
+Short Description
+
+Completely cleared
+
+Ensures no leftover unwanted text from scraping
+
+Long Description
+
+Keeps only the first 12 images
+
+Works for both:
+
+contenteditable editors
+
+iframe-based editors
+
+How to Use
+1. Install Tampermonkey
+
+Chrome Web Store → search Tampermonkey
+
+2. Create a New Script
+
+Paste the entire script from this repository.
+
+3. Open BigSeller’s Product Crawling Page
+https://www.bigseller.pro/web/crawl/index.htm
+
+4. Use Any of These Triggers
+✔ Keyboard Shortcut
+Alt + T
+
+✔ Floating Button
+
+A button appears on the page:
+
+标题繁体 + 清短描 + 长描限12图
+
+✔ Tampermonkey Menu
+BigSeller 一键：标题繁体 + 清空短描述 + 长描述限12图
+
+File Structure
+bigSeller-cn2tw/
+│
+├── bigseller_cn2tw.user.js       # Main script (this repo’s core)
+└── README.md                     # Documentation
+
+Dictionary Expansion
+
+You can freely expand the dictionary inside:
+
+const WORD_DICT = [ ... ]
+
+
+Adding industry-specific or brand-specific terms improves segmentation accuracy.
+Every new term must be Traditional Chinese.
+
+Example to add:
+
+'新詞彙', '品牌名', '系列名', '質地名'
+
+Known Limitations
+
+Segmentation is optimized for beauty & cosmetics categories.
+
+Cross-genre products may require dictionary expansion.
+
+Multi-brand titles (rare) may follow unexpected patterns.
+
+If you encounter incorrect segmentation, simply provide:
+
+Original title (no spaces)
+
+The ideal segmentation you want
+
+I can update the dictionary or rules accordingly.
+
+Version
+
+v1.3
+
+Large dictionary expansion
+
+Added 自黏 / 免膠免卸 / 富家千金 / 太陽花 / 魚尾 / 寬梗魚尾 / 山茶花
+
+Improved number + classifier merging
+
+Improved category-end rule
+
+General refinements in token and segmentation logic
+
+License
+
+MIT License
