@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         BigSeller Shopee Title Prefix Helper
 // @namespace    https://joe.bigseller.helper
-// @version      0.7
-// @description  Add store-based prefixes to Shopee product titles on BigSeller edit pages, with smart Chinese spacing, description template, and MD5 button click.
+// @version      0.8
+// @description  Add store-based prefixes to Shopee product titles on BigSeller edit pages, with smart Chinese spacing, description template, MD5 click, SKU normalize, and title tweak tools.
 // @match        https://www.bigseller.pro/web/listing/shopee/edit/*
 // @run-at       document-idle
 // @grant        none
@@ -89,7 +89,8 @@
   const LABEL_TITLE = '产品名称';
 
   // ===================== UTILITIES =====================
-    // 简体转繁体（简易版，可按需要继续补充映射）
+
+  // 简体转繁体（简易版降级）
   const SIMPLE_TO_TRAD = {
     '烟': '煙',
     '乌': '烏',
@@ -158,6 +159,7 @@
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+
   function textNormalize(str) {
     return (str || '').replace(/\s+/g, '').trim();
   }
@@ -199,16 +201,13 @@
   }
 
   function getShopName() {
-    // 1) 优先：兼容 BigSeller 新版 antd Select（div[autoid="store_button"]）
+    // 1) 新版 antd Select：div[autoid="store_button"]
     let rendered = null;
 
-    // 1.1 直接按 autoid 找容器
     const antContainers = Array.from(document.querySelectorAll('div[autoid="store_button"]'));
     for (const c of antContainers) {
-      // 实际选中的值在 .ant-select-selection-selected-value 里
       let r = c.querySelector('.ant-select-selection-selected-value');
       if (!r) {
-        // 兜底：有些版本只有 __rendered
         r = c.querySelector('.ant-select-selection__rendered');
       }
       if (r && textNormalize(r.textContent || '')) {
@@ -217,7 +216,7 @@
       }
     }
 
-    // 1.2 按表单项 label = 店铺 来找
+    // 2) 通过表单项 label = 店铺
     if (!rendered) {
       const formItems = Array.from(document.querySelectorAll('.ant-form-item'));
       for (const item of formItems) {
@@ -242,7 +241,7 @@
       return name;
     }
 
-    // 2) 旧版：通过 label + select/input 获取
+    // 3) 旧版：label + select/input
     const shopField = findFieldByLabelText(LABEL_SHOP, ['select', 'input']);
     if (shopField) {
       if (shopField.tagName === 'SELECT') {
@@ -254,7 +253,6 @@
 
     return '';
   }
-
 
   function getTitleField() {
     return findFieldByLabelText(LABEL_TITLE, ['input', 'textarea']);
@@ -282,9 +280,8 @@
       const remaining = chars.length - i;
       let size;
       if (remaining <= 6) {
-        size = remaining; // 最后不足 6 个就全部一块
+        size = remaining;
       } else {
-        // 默认 4 个一组，避免最后只剩 1 个字符
         if (remaining - 4 === 1) {
           size = 5;
         } else if (remaining - 4 === 2) {
@@ -298,7 +295,6 @@
         }
       }
 
-      // 如果下一个 2 字刚好是产品名后缀，就把它们一起并入当前块
       if (i + size + 2 <= chars.length) {
         const maybeSuffix = chars.slice(i + size, i + size + 2).join('');
         if (PRODUCT_SUFFIXES.includes(maybeSuffix)) {
@@ -316,7 +312,7 @@
     if (!title) return '';
     const trimmed = title.trim();
 
-    // 把前面的英文品牌单独拿出来（例如 CAPPUVINI）
+    // 把前面的英文品牌单独拿出来
     let brand = '';
     let rest = trimmed;
     const brandMatch = trimmed.match(/^[A-Za-z][A-Za-z0-9\s&-]*/);
@@ -329,7 +325,7 @@
     if (brand) tokens.push(brand);
 
     let buffer = '';
-    let currentType = null; // 'C' (Chinese) or 'O' (Other)
+    let currentType = null; // 'C' or 'O'
 
     function flush() {
       if (!buffer) return;
@@ -380,17 +376,17 @@
   }
 
   function getDescriptionField() {
-    // 0) 直接处理 CKEditor iframe（BigSeller 当前用于产品描述）
+    // 0) CKEditor iframe
     const ckIframe = document.querySelector('iframe.cke_wysiwyg_frame');
     if (ckIframe && ckIframe.contentDocument && ckIframe.contentDocument.body) {
-      return ckIframe.contentDocument.body; // 在 iframe 里的 <body> 上操作 HTML
+      return ckIframe.contentDocument.body;
     }
 
-    // 1) 普通 textarea，通过标签查找
+    // 1) textarea via label
     const viaLabel = findFieldByLabelText('产品描述', ['textarea']);
     if (viaLabel) return viaLabel;
 
-    // 2) 通过 AI 按钮附近来定位
+    // 2) via AI button
     const aiSpan = document.querySelector(
       'span[title*="产品描述"], span[title*="產品描述"], span[title*="生成产品描述"], span[title*="生成產品描述"]'
     );
@@ -415,7 +411,7 @@
       }
     }
 
-    // 3) 通过左侧标题“产品描述/產品描述”来定位
+    // 3) via left title
     const titleNodes = Array.from(
       document.querySelectorAll('.chat_pull_left.title, .page_edit_item .title, .com_card_head .title, .com_card_head')
     );
@@ -445,11 +441,10 @@
     const CURRENT_SUFFIX = cfg.descSuffix || '';
     const { prefixes: ALL_PREFIXES, suffixes: ALL_SUFFIXES } = getAllDescriptionTemplates();
 
-    // TEXTAREA / INPUT 模式：去掉旧前后缀文本，保留中间内容，再加上当前前后缀
+    // TEXTAREA / INPUT 模式
     if (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT') {
       let text = field.value || '';
 
-      // 多次清理旧的前缀 / 后缀，防止堆叠（所有店铺模板都清一次）
       for (let i = 0; i < 5; i++) {
         const before = text;
         ALL_PREFIXES.forEach((p) => {
@@ -464,16 +459,13 @@
       text = text.trim();
       const merged = CURRENT_PREFIX + text + (text ? '\n' : '') + CURRENT_SUFFIX;
 
-
       field.value = merged;
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.dispatchEvent(new Event('change', { bubbles: true }));
       return;
     }
 
-    // 富文本 / contenteditable / iframe body 模式：
-    // 结构通常是：前缀文字 + 图片(及中间说明) + 后缀文字
-    // 目标：删掉前后缀文字，保留中间图片（及其周围结构），再包上当前前后缀
+    // 富文本模式
     const doc = field.ownerDocument || document;
     const imgs = field.querySelectorAll('img');
     let middleHtml = '';
@@ -487,7 +479,6 @@
       temp.appendChild(frag);
       middleHtml = (temp.innerHTML || '').trim();
     } else {
-      // 没有图片时，保留原来的全部内容作为“中间内容”
       middleHtml = (field.innerHTML || '').trim();
     }
 
@@ -505,19 +496,17 @@
     field.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // ===================== CORE =====================
+  // ===================== COLOR VARIANT HELPER =====================
 
   async function convertColorOptionsToTraditional() {
     await loadOpenCC();
-    // 找到所有颜色/规格的小铅笔按钮
+
     const allEditLinks = Array.from(document.querySelectorAll('a.custom_item_edit'));
     if (!allEditLinks.length) {
       console.warn('[Title Helper] 未找到颜色编辑按钮');
       return;
     }
 
-    // 仅保留前面文字里本身含有 # 的项，例如 "CP365-01#蔷薇烟"；
-    // 像 "3g" 这种净含量不会被点击
     const editLinks = allEditLinks.filter((link) => {
       const container =
         link.closest('.variation_second_name_text_0') ||
@@ -530,11 +519,9 @@
     if (!editLinks.length) return;
 
     for (const link of editLinks) {
-      // 点击铅笔，弹出编辑框
       link.click();
       await sleep(150);
 
-      // 只处理当前弹出的 textarea（position: absolute 的浮层）
       const popup = document.querySelector(
         'div.bs_antd_textarea_box.textareaBox[style*="position: absolute"]'
       );
@@ -546,8 +533,6 @@
       if (!textarea) continue;
 
       const orig = (textarea.value || '').trim();
-
-      // 再保险：没有 # 的直接跳过（不应该出现在这里）
       if (!orig.includes('#')) {
         const okBtnSkip = popup.querySelector('button.ant-btn.ant-btn-primary');
         if (okBtnSkip) okBtnSkip.click();
@@ -555,21 +540,19 @@
         continue;
       }
 
-      // 1) 去掉代码前面的前缀，如 "CP365-01#蔷薇烟" → "01#蔷薇烟"
       let simplified = orig;
       const hashIndex = simplified.indexOf('#');
       if (hashIndex !== -1) {
-        const beforeHash = simplified.slice(0, hashIndex); // 例如 "CP365-01"
-        const afterHash = simplified.slice(hashIndex + 1); // 例如 "蔷薇烟"
+        const beforeHash = simplified.slice(0, hashIndex);
+        const afterHash = simplified.slice(hashIndex + 1);
         let code = beforeHash;
         const dashIdx = code.indexOf('-');
         if (dashIdx !== -1) {
-          code = code.slice(dashIdx + 1); // 只保留 "01"
+          code = code.slice(dashIdx + 1);
         }
         simplified = code + '#' + afterHash;
       }
 
-      // 2) 文本转繁体
       const converted = toTraditional(simplified);
 
       if (converted && converted !== orig) {
@@ -578,7 +561,6 @@
         textarea.dispatchEvent(new Event('change', { bubbles: true }));
       }
 
-      // 点击本弹窗里的「确定」按钮
       const okBtn = popup.querySelector('button.ant-btn.ant-btn-primary');
       if (okBtn) okBtn.click();
 
@@ -586,53 +568,45 @@
     }
   }
 
-  // ===================== CORE =====================
+  // ===================== SKU NORMALIZATION =====================
 
-    function updateSkuWithParent(parentSku) {
-        if (!parentSku) return;
+  function updateSkuWithParent(parentSku) {
+    if (!parentSku) return;
 
-        // 抓取页面上所有输入框和文本框
-        const allFields = Array.from(document.querySelectorAll('input, textarea'));
+    const allFields = Array.from(document.querySelectorAll('input, textarea'));
 
-        // 把 value 里带 # 的当作 SKU，例如 CP365-01#蔷薇烟-3g
-        const skuFields = allFields.filter((el) => {
-            const v = (el.value || '').trim();
-            return v && v.includes('#');
-        });
+    const skuFields = allFields.filter((el) => {
+      const v = (el.value || '').trim();
+      return v && v.includes('#');
+    });
 
-        if (!skuFields.length) return;
+    if (!skuFields.length) return;
 
-        // 尾部重量/容量后缀，例如 -3g / -10ml / 5ml 等
-        const weightSuffixRe = /-?[0-9]+(?:\.[0-9]+)?\s*(?:g|kg|ml|l|L|G|KG|ML)\s*$/i;
+    const weightSuffixRe = /-?[0-9]+(?:\.[0-9]+)?\s*(?:g|kg|ml|l|L|G|KG|ML)\s*$/i;
 
-        skuFields.forEach((el) => {
-            let val = (el.value || '').trim();
-            if (!val) return;
+    skuFields.forEach((el) => {
+      let val = (el.value || '').trim();
+      if (!val) return;
 
-            // 去掉末尾的重量/容量
-            val = val.replace(weightSuffixRe, '').trim();
+      val = val.replace(weightSuffixRe, '').trim();
 
-            // 如果已经以父 SKU 开头，就不重复添加
-            if (!val.startsWith(parentSku)) {
-                val = parentSku + '-' + val;
-            }
+      if (!val.startsWith(parentSku)) {
+        val = parentSku + '-' + val;
+      }
 
-            el.value = val;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-    }
+      el.value = val;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
 
-
-  // ===================== CORE =====================
-
-  // ===================== CORE =====================
+  // ===================== TITLE PREFIX CORE =====================
 
   function applyPrefix(storeNameOverride) {
     const cfg = getStoreConfig(storeNameOverride);
     if (!cfg || !cfg.titlePrefix) return;
 
-    const STANDARD_PREFIX = cfg.titlePrefix; // 每个店铺各自的标准前缀
+    const STANDARD_PREFIX = cfg.titlePrefix;
 
     const titleField = getTitleField();
     if (!titleField) return;
@@ -640,23 +614,35 @@
     const oldVal = titleField.value || '';
     let text = oldVal.trimStart();
 
-    // 1）已经是该店铺的标准前缀：什么也不做
+    // 已经是该店铺的标准前缀：不处理
     if (text.startsWith(STANDARD_PREFIX)) {
       return;
     }
 
-    // 2）前面有其他形式的「台灣現貨」前缀，例如 💕台灣現貨💕 / 💋 台灣現貨💋 / 🎀台灣現貨🎀
-    //    规则：如果「台灣現貨」出现在前 4 个字符之内，则视为旧前缀，统一替换为本店標準前缀
-
-
-    // 2）前面有其他形式的「台灣現貨」前缀，例如 💕台灣現貨💕 / 💋 台灣現貨💋
-    //    规则：如果「台灣現貨」出现在前 4 个字符之内，则视为旧前缀，统一替换
+    // 处理各种旧形式的「台灣現貨」前缀
     const idx = text.indexOf('台灣現貨');
     if (idx !== -1 && idx <= 4) {
-      const after = text.slice(idx + '台灣現貨'.length).trimStart();
+      // 从「台灣現貨」末尾开始
+      let prefixEnd = idx + '台灣現貨'.length;
+
+      // 吃掉紧跟其后的空格 + 非中文非字母非数字（通常是 emoji 或符号）
+      while (prefixEnd < text.length) {
+        const ch = text[prefixEnd];
+        if (/\s/.test(ch)) {
+          prefixEnd++;
+          continue;
+        }
+        if (!isChineseChar(ch) && !/[A-Za-z0-9]/.test(ch)) {
+          prefixEnd++;
+          continue;
+        }
+        break;
+      }
+
+      const after = text.slice(prefixEnd).trimStart();
       text = STANDARD_PREFIX + after;
     } else {
-      // 3）没有任何「台灣現貨」前缀 → 直接加上标准前缀
+      // 没有任何「台灣現貨」 → 直接加标准前缀
       text = STANDARD_PREFIX + text;
     }
 
@@ -665,7 +651,61 @@
     titleField.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  // ===================== TITLE TWEAK HELPERS =====================
+
+  function tweakTitleByAction(action) {
+    if (!action) return;
+    const titleField = getTitleField();
+    if (!titleField) return;
+
+    const raw = (titleField.value || '').trim();
+    if (!raw) return;
+
+    // 检测当前使用的前缀（4 家店里任意一个）
+    let usedPrefix = '';
+    for (const cfg of Object.values(STORE_CONFIG)) {
+      const p = cfg.titlePrefix;
+      if (p && raw.startsWith(p)) {
+        usedPrefix = p;
+        break;
+      }
+    }
+
+    const body = usedPrefix ? raw.slice(usedPrefix.length).trim() : raw;
+    if (!body) return;
+
+    const tokens = body.split(' ').filter(Boolean);
+    if (!tokens.length) return;
+
+    if (action === '尾词调换') {
+      if (tokens.length >= 2) {
+        const last = tokens.length - 1;
+        const tmp = tokens[last];
+        tokens[last] = tokens[last - 1];
+        tokens[last - 1] = tmp;
+      }
+    } else if (
+      action === '學生黨平價' ||
+      action === '美妝化妝品' ||
+      action === '新品上市'
+    ) {
+      if (!tokens.includes(action)) {
+        tokens.push(action);
+      }
+    } else {
+      return;
+    }
+
+    const newBody = tokens.join(' ');
+    const newTitle = usedPrefix ? usedPrefix + newBody : newBody;
+
+    titleField.value = newTitle;
+    titleField.dispatchEvent(new Event('input', { bubbles: true }));
+    titleField.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
   // ===================== FLOATING UI =====================
+
   function createFloatingPanel() {
     if (document.getElementById('bs-title-prefix-helper')) return;
 
@@ -721,11 +761,10 @@
       background: '#ffecf5',
     });
 
-        btnApply.addEventListener('click', () => {
+    btnApply.addEventListener('click', () => {
       const chosenStore = select.value || getShopName();
       applyPrefix(chosenStore);
       applyDescriptionForStore(chosenStore);
-      // 应用前缀 + 描述后，自动点击 MD5 按钮
       const md5btn = document.querySelector('.sell_md5');
       if (md5btn) md5btn.click();
       refreshShopLabel();
@@ -733,7 +772,24 @@
 
     panel.appendChild(btnApply);
 
-    // 第二个按钮：仅负责 MD5（以及后续可扩展为 SKU 处理）
+    // 中间：标题微调 下拉（选择即生效）
+    const tweakSelect = document.createElement('select');
+    tweakSelect.style.display = 'block';
+    tweakSelect.style.width = '100%';
+    tweakSelect.style.marginTop = '4px';
+    ['', '尾词调换', '學生黨平價', '美妝化妝品', '新品上市'].forEach(function (label) {
+      const opt = document.createElement('option');
+      opt.value = label;
+      opt.textContent = label || '標題微調選項';
+      tweakSelect.appendChild(opt);
+    });
+    tweakSelect.addEventListener('change', function () {
+      const action = tweakSelect.value;
+      tweakTitleByAction(action);
+    });
+    panel.appendChild(tweakSelect);
+
+    // 第二个按钮：仅负责 SKU 规范化
     const btnMd5 = document.createElement('button');
     btnMd5.textContent = '合成SKU';
     Object.assign(btnMd5.style, {
@@ -748,17 +804,14 @@
     });
 
     btnMd5.addEventListener('click', () => {
-      // 1) 先处理 Parent SKU + 子 SKU
       const parentSkuInput = document.querySelector('input[autoid="parent_sku_text"]');
       const parentSku = parentSkuInput ? (parentSkuInput.value || '').trim() : '';
 
-      // 如果 Parent SKU 为空，则直接停止，不处理 SKU
       if (!parentSku) {
         refreshShopLabel();
         return;
       }
 
-      // 使用父 SKU 更新所有变体 SKU（不再在此处点击 MD5）
       updateSkuWithParent(parentSku);
 
       refreshShopLabel();
@@ -788,14 +841,14 @@
 
     function refreshShopLabel() {
       const autoShop = getShopName();
-    if (autoShop) {
-      currentShopLabel.textContent = '店铺：' + autoShop;
-      if (STORE_CONFIG[autoShop]) select.value = autoShop;
-    } else {     currentShopLabel.textContent = '店铺：未检测到';
+      if (autoShop) {
+        currentShopLabel.textContent = '店铺：' + autoShop;
+        if (STORE_CONFIG[autoShop]) select.value = autoShop;
+      } else {
+        currentShopLabel.textContent = '店铺：未检测到';
       }
     }
 
-    // 初始刷新一次，并定时刷新几次，兼容页面加载后用户再选择店铺的情况
     refreshShopLabel();
     let refreshCount = 0;
     const refreshTimer = setInterval(() => {
@@ -804,16 +857,10 @@
       if (refreshCount > 15) clearInterval(refreshTimer);
     }, 1000);
 
-    const autoShop = getShopName();
-    if (autoShop) {
-      currentShopLabel.textContent = '店铺：' + autoShop;
-      if (STORE_CONFIG[autoShop]) select.value = autoShop;
-    } else {
-      currentShopLabel.textContent = '店铺：未检测到';
-    }
-
     document.body.appendChild(panel);
   }
+
+  // ===================== INIT =====================
 
   function init() {
     let tries = 0;
@@ -829,5 +876,7 @@
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
-  } else init();
+  } else {
+    init();
+  }
 })();
