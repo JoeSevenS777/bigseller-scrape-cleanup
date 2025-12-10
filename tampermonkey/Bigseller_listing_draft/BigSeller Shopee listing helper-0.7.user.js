@@ -110,12 +110,21 @@
     '台': '臺',
     '蔷': '薔',
   };
+  // 反向映射：繁體 -> 簡體，用於 SKU 前綴統一為簡體
+  const TRAD_TO_SIMP = {};
+  Object.keys(SIMPLE_TO_TRAD).forEach((simp) => {
+    const trad = SIMPLE_TO_TRAD[simp];
+    TRAD_TO_SIMP[trad] = simp;
+  });
 
   let openccReady = false;
-  let openccConverter = null;
+  let openccCn2Tw = null; // 简 -> 繁
+  let openccTw2Cn = null; // 繁 -> 简
 
   function loadOpenCC() {
-    if (openccConverter && typeof openccConverter === 'function') {
+    // 如果已經有任何一個轉換器可用，就直接返回
+    if ((openccCn2Tw && typeof openccCn2Tw === 'function') ||
+        (openccTw2Cn && typeof openccTw2Cn === 'function')) {
       return Promise.resolve();
     }
     if (openccReady) {
@@ -124,17 +133,21 @@
     openccReady = true;
     return new Promise((resolve) => {
       const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/cn2t.js';
+      script.src = 'https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/full.js';
       script.onload = () => {
         try {
           if (window.OpenCC) {
-            openccConverter = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
+            // 简体 -> 繁体
+            openccCn2Tw = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
+            // 繁体 -> 简体
+            openccTw2Cn = window.OpenCC.Converter({ from: 'tw', to: 'cn' });
           }
         } catch (e) {
           console.warn('[Title Helper] OpenCC 初始化失败:', e);
         }
         resolve();
       };
+
       script.onerror = () => {
         console.warn('[Title Helper] OpenCC 脚本加载失败，使用简易映射作为降级');
         resolve();
@@ -143,17 +156,34 @@
     });
   }
 
-  function toTraditional(text) {
+  function toSimplified(text) {
     const s = text || '';
-    if (openccConverter && typeof openccConverter === 'function') {
+    // 优先用 OpenCC 繁 -> 简
+    if (openccTw2Cn && typeof openccTw2Cn === 'function') {
       try {
-        return openccConverter(s);
+        return openccTw2Cn(s);
       } catch (e) {
-        console.warn('[Title Helper] OpenCC 转换出错，使用简易映射:', e);
+        console.warn('[Title Helper] OpenCC 繁轉簡出錯，使用簡易映射:', e);
       }
     }
+    // CDN 失敗時，用小字典做降級
+    return s.split('').map((ch) => TRAD_TO_SIMP[ch] || ch).join('');
+  }
+
+  function toTraditional(text) {
+    const s = text || '';
+    // 优先用 OpenCC 简 -> 繁
+    if (openccCn2Tw && typeof openccCn2Tw === 'function') {
+      try {
+        return openccCn2Tw(s);
+      } catch (e) {
+        console.warn('[Title Helper] OpenCC 簡轉繁出錯，使用簡易映射:', e);
+      }
+    }
+    // 降級：用簡單對照表映射
     return s.split('').map((ch) => SIMPLE_TO_TRAD[ch] || ch).join('');
   }
+
 
   function textNormalize(str) {
     return (str || '').replace(/\s+/g, '').trim();
@@ -245,8 +275,76 @@
   }
 
   function getTitleField() {
-    return findFieldByLabelText(LABEL_TITLE, ['input', 'textarea']);
+    // 0) 直接根據 BigSeller 的 autoid 尋找
+    const direct = document.querySelector('input[autoid="product_name_text"]');
+    if (direct) return direct;
+
+    // 1) 優先用標籤文字匹配
+    const LABEL_CANDIDATES = [
+      LABEL_TITLE,
+      '商品标题',
+      '商品標題',
+      '商品名稱',
+      '商品名称',
+      '產品標題',
+      '產品名稱',
+      '标题',
+      '標題',
+      'Product Name',
+      '產品名稱 (Product Name)'
+    ];
+
+    for (const lab of LABEL_CANDIDATES) {
+      const byLabel = findFieldByLabelText(lab, ['input', 'textarea']);
+      if (byLabel) return byLabel;
+    }
+
+    // 2) 使用跨 document / iframe 的 text 欄位集合
+    const textInputs = getAllTextFields();
+
+    // 2a) 優先選擇 placeholder / aria-label 帶有「標題」等字樣的
+    const byPlaceholder = textInputs.find((el) => {
+      const ph = (el.getAttribute('placeholder') || '').trim();
+      const aria = (el.getAttribute('aria-label') || '').trim();
+      const txt = ph + ' ' + aria;
+      return /標題|标题|商品名稱|商品名称|產品名稱|產品名称|Product Name/i.test(txt);
+    });
+    if (byPlaceholder) return byPlaceholder;
+
+    // 2b) 再根據可見性 + maxLength 推斷：Shopee 標題通常較長且在頁面上方
+    const visible = textInputs.filter((el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      if (rect.top > window.innerHeight * 0.7) return false; // 太靠下的先排除
+      const ml = el.maxLength;
+      return ml === -1 || ml >= 60; // 標題一般有較大的 maxLength
+    });
+
+    if (visible.length) {
+      // 嘗試優先選擇 maxLength 接近 Shopee 標題（例如 120）者
+      visible.sort((a, b) => {
+        const ma = a.maxLength || 9999;
+        const mb = b.maxLength || 9999;
+        const da = Math.abs(ma - 120);
+        const db = Math.abs(mb - 120);
+        return da - db;
+      });
+      return visible[0];
+    }
+
+    // 3) 最後退而求其次：挑第一個較長的 text 欄位當作標題
+    const longInput = textInputs.find((el) => {
+      const ml = el.maxLength;
+      return ml === -1 || ml >= 80;
+    }) || textInputs.find((el) => {
+      const ml = el.maxLength;
+      return ml === -1 || ml >= 50;
+    });
+
+    return longInput || null;
   }
+
 
   function getParentSkuInput() {
     let input = document.querySelector('input[autoid="parent_sku_text"]');
@@ -673,28 +771,65 @@
 
   // ===================== SKU NORMALIZATION =====================
 
-  function updateSkuWithParent(parentSku) {
+  async function updateSkuWithParent(parentSku) {
     if (!parentSku) return;
 
-    // 只在銷售區塊 (saleInfo) 內搜尋，避免誤傷「產品名稱」等其他輸入框
+    // 確保 OpenCC 已初始化（如果 CDN 掉了，仍會退回到小字典）
+    await loadOpenCC();
+
+    // 1) 把父 SKU 轉為簡體，確保前綴統一
+    const parentSkuSimplified = toSimplified(parentSku);
+    const prefixFinal = parentSkuSimplified || parentSku;
+
+    // 2) 把父 SKU 輸入框本身也改成簡體顯示
+    const parentSkuInput = getParentSkuInput();
+    if (parentSkuInput && parentSkuInput.value !== prefixFinal) {
+      parentSkuInput.value = prefixFinal;
+      parentSkuInput.dispatchEvent(new Event('input', { bubbles: true }));
+      parentSkuInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    // 3) 只在銷售區塊 (saleInfo) 內搜尋子 SKU 欄位
     const saleInfo = document.querySelector('div[data-anchor="saleInfo"]');
     const scope = saleInfo || document;
 
-    const parentSkuInput = getParentSkuInput();
-
     const allFields = Array.from(scope.querySelectorAll('input[type="text"], textarea'));
 
-    // SKU 欄通常較長，maxLength 比顏色大，或本身內容較長
+    // 更精確地鎖定 SKU 欄位：
+    //  - autoid/name/placeholder/aria-label 中包含 "sku"
+    //  - 或者所屬行 / 容器的文字中包含 "SKU"
     const skuFields = allFields.filter((el) => {
       if (parentSkuInput && el === parentSkuInput) return false; // 排除父 SKU
-      const ml = el.maxLength;
+
       const val = (el.value || '').trim();
       if (!val) return false;
-      return ml === -1 || ml > 30 || val.length > 20;
+
+      const autoid = (el.getAttribute('autoid') || '').toLowerCase();
+      const name = (el.name || '').toLowerCase();
+      const placeholder = (el.getAttribute('placeholder') || '').toLowerCase();
+      const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+
+      const looksLikeSkuByAttr =
+        autoid.includes('sku') ||
+        name.includes('sku') ||
+        placeholder.includes('sku') ||
+        ariaLabel.includes('sku');
+
+      if (looksLikeSkuByAttr) return true;
+
+      // 往上找一圈，看父節點文本是否包含 "SKU"（避免誤傷其它欄位）
+      let row = el.closest('tr, .ant-form-item, .page_edit_item, .variation_single_items');
+      while (row && row !== scope && row !== document.body) {
+        const txt = (row.textContent || '').replace(/\s+/g, '');
+        if (txt.includes('SKU')) return true;
+        row = row.parentElement;
+      }
+
+      return false;
     });
 
     if (!skuFields.length) {
-      console.warn('[Title Helper] 未找到SKU輸入框 (saleInfo 區塊內的 text/textarea, maxLength>30)');
+      console.warn('[Title Helper] 未找到SKU輸入框（未匹配到包含 "SKU" 的欄位）');
       return;
     }
 
@@ -704,10 +839,29 @@
       let val = (el.value || '').trim();
       if (!val) return;
 
+      // 去掉末尾重量單位
       val = val.replace(weightSuffixRe, '').trim();
 
-      if (!val.startsWith(parentSku + '-')) {
-        val = parentSku + '-' + val;
+      // 4) 去掉舊的父 SKU 前綴（可能是繁體，也可能是以前的簡體）
+      const prefixCandidates = [];
+      if (parentSku) prefixCandidates.push(parentSku);
+      if (parentSkuSimplified && parentSkuSimplified !== parentSku) {
+        prefixCandidates.push(parentSkuSimplified);
+      }
+
+      for (const cand of prefixCandidates) {
+        const candWithDash = cand + '-';
+        if (val.startsWith(candWithDash)) {
+          val = val.slice(candWithDash.length).trim();
+          break;
+        }
+      }
+
+      // 5) 重新組合：簡體父 SKU + 子 SKU
+      if (val) {
+        val = prefixFinal + '-' + val;
+      } else {
+        val = prefixFinal;
       }
 
       el.value = val;
@@ -715,7 +869,10 @@
       el.dispatchEvent(new Event('change', { bubbles: true }));
     });
 
-    console.log('[Title Helper] 合成SKU已完成，處理欄位數量:', skuFields.length);
+    console.log(
+      '[Title Helper] 合成SKU已完成（父SKU已轉簡體，並重新套用前綴），處理欄位數量:',
+      skuFields.length
+    );
   }
 
   // ===================== TITLE PREFIX CORE =====================
@@ -733,7 +890,10 @@
     const STANDARD_PREFIX = cfg.titlePrefix;
 
     const titleField = getTitleField();
-    if (!titleField) return;
+    if (!titleField) {
+      console.warn('[Title Helper] 未找到標題輸入框，無法應用前綴');
+      return;
+    }
 
     const oldVal = titleField.value || '';
     let text = oldVal.trimStart();
@@ -774,8 +934,12 @@
 
   function tweakTitleByAction(action) {
     if (!action) return;
+
     const titleField = getTitleField();
-    if (!titleField) return;
+    if (!titleField) {
+      console.warn('[Title Helper] 未找到標題輸入框，無法進行標題微調');
+      return;
+    }
 
     const raw = (titleField.value || '').trim();
     if (!raw) return;
@@ -919,7 +1083,7 @@
       background: '#ffecec',
     });
 
-    btnSku.addEventListener('click', () => {
+    btnSku.addEventListener('click', async () => {
       const parentSkuInput = getParentSkuInput();
       const parentSku = parentSkuInput ? (parentSkuInput.value || '').trim() : '';
 
@@ -929,9 +1093,10 @@
         return;
       }
 
-      updateSkuWithParent(parentSku);
+      await updateSkuWithParent(parentSku);
       refreshShopLabel();
     });
+
 
     panel.appendChild(btnSku);
 
@@ -981,14 +1146,18 @@
     let tries = 0;
     const timer = setInterval(() => {
       tries++;
-      if (getTitleField()) {
+      // 優先等到標題欄位出現；如果一直抓不到，也不要影響浮動面板顯示
+      if (getTitleField() || tries > 6) {
         createFloatingPanel();
         clearInterval(timer);
+        return;
       }
-      if (tries > 20) clearInterval(timer);
+      if (tries > 40) {
+        // 超時保險：直接停止輪詢，避免無限循環
+        clearInterval(timer);
+      }
     }, 500);
   }
-
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
