@@ -1,71 +1,79 @@
-BigSeller Shopee Title Prefix Helper
+# BigSeller Shopee Title Prefix Helper
 
-Automated Listing Workflow for Shopee Sellers on BigSeller
+Automated listing workflow for Shopee sellers on **BigSeller 编辑产品**.
 
-This userscript is a comprehensive automation tool designed to streamline Shopee listing preparation inside the BigSeller 编辑产品 page. It standardizes title prefixes, description templates, SKU formats, and variant naming — reducing repetitive manual work and ensuring consistent listing quality across multiple stores.
+This userscript streamlines Shopee listing preparation inside BigSeller by standardizing:
 
-🚀 Features Overview
-1. Store-Aware Title & Description Automation
-Title Prefix
+- Title prefixes  
+- Description templates  
+- SKU formats  
+- Variant naming  
+- MD5 refresh
 
-Automatically inserts the correct store-specific prefix.
+It reduces repetitive manual work and keeps listings consistent across multiple stores.
 
-Removes any existing old prefix (e.g., 🎀台灣現貨🎀, 💋台灣現貨💋, etc.).
+---
 
-Prevents duplicates and messy mixed-prefix cases.
+## ✨ Features Overview
 
-Description Templates
+### 1. Store-Aware Title & Description Automation
 
-Inserts store-matching description header + footer.
+#### Title Prefix
 
-Cleans up old templates before applying the new one.
+- Automatically inserts the correct **store-specific** title prefix.
+- Removes any existing old prefix (e.g. `🎀台灣現貨🎀`, `💋台灣現貨💋`, `💄台灣現貨💄`).
+- Prevents duplicate or mixed prefixes.
 
-Supports:
+#### Description Templates
 
-<textarea>
+- Inserts **description header + footer** based on the selected store.
+- Cleans up old templates before applying the new one.
+- Supports:
+  - `<textarea>` description boxes
+  - CKEditor / Quill / rich-text editors (iframe or div-based)
+  - Plain contenteditable blocks
 
-CKEditor / Quill rich text editors
+#### MD5 Auto Refresh
 
-Editable <div> blocks
+After applying prefix + description, the script automatically clicks BigSeller’s `.sell_md5` button (if present) to refresh the MD5 checksum.
 
-MD5 Auto Refresh
+---
 
-After applying prefix + description, the script automatically triggers BigSeller’s MD5 refresh button (.sell_md5) when available.
+### 2. SKU Automation
 
-2. SKU Automation
-(A) 合成 SKU — Parent SKU + Child SKU Formatting
+#### A. 合成 SKU（Parent + Child）
 
-Detects parent SKU.
+- Detects **parent SKU** field (`autoid="parent_sku_text"` and other fallbacks).
+- Converts parent SKU from **Traditional → Simplified Chinese** via OpenCC (with internal fallback map).
+- Normalizes all variant SKUs inside the sale info section to:
 
-Converts parent SKU from Traditional → Simplified Chinese (OpenCC fallback included).
-
-Normalizes all variant SKUs into this format:
-
+```text
 父SKU-子SKU
+Strips weight suffixes such as:
 
+text
+Copy code
+5g, 10g, 30ml, 100ML, -8G, -5ml …
+Avoids interfering with unrelated fields.
 
-Removes weight suffixes (e.g., 5g, 10ml, -8G, etc.).
+B. SKU 转繁体（Variant Name Conversion）
+Locates variant name edit buttons (including shadow DOM + iframe cases).
 
-Avoids touching unrelated fields in the page.
+Opens each popup, reads the variant name, and converts Simplified → Traditional.
 
-(B) SKU 转繁体 — Variant Name Conversion
+Smart parsing of codes like:
 
-Automatically opens each variant name edit popup.
+text
+Copy code
+CP365-01#蔷薇烟  →  01#薔薇煙
+Saves automatically and closes the popup.
 
-Normalizes formats such as:
-
-CP365-01#蔷薇烟 → 01#薔薇煙
-
-
-Converts simplified → traditional Chinese (OpenCC if available; fallback dictionary otherwise).
-
-Automatically saves and closes each popup.
+Uses OpenCC when available; falls back to a small internal mapping.
 
 3. Title Fine-Tuning Tools
+A dropdown in the floating panel provides instant title adjustments:
 
-A dropdown offers instant micro-adjustments:
-
-尾词调换 — swap last two title segments
+尾词调换 – swaps the last two segments of the title.
 
 學生黨平價
 
@@ -73,108 +81,143 @@ A dropdown offers instant micro-adjustments:
 
 新品上市
 
-These allow fast listing diversification and SEO tuning.
+These are appended to the end of the title (after the prefix) and help create small variants for SEO / A/B testing.
 
-4. Floating Control Panel UI
+4. Floating Control Panel (UI)
+A floating panel appears at the bottom-right of BigSeller:
 
-A persistent panel appears at the bottom-right of BigSeller:
+Shows: current detected store name (店铺：XXX)
 
-Displays:
+Store selection dropdown (overrides auto-detected shop)
 
-Auto-detected shop name
+Buttons:
 
-Allows:
+应用前缀+描述+MD5
 
-Store selection
-
-Apply Title Prefix + Description + MD5
-
-Title micro-tuning
+Title micro-tuning dropdown (標題微調選項)
 
 合成SKU
 
 SKU转繁体
 
-The panel is self-correcting and will refresh shop detection during the first few seconds.
+The panel periodically re-checks the store name for a few seconds after load to follow BigSeller’s dynamic rendering.
 
-🔧 Technical Highlights
-Robust DOM Targeting
+🧠 Internals & Logic Highlights
+DOM Detection
+Product Name (title):
 
-The script is engineered to handle BigSeller’s frequently changing UI.
+Directly targets input[autoid="product_name_text"].
 
-Multi-layered detection for:
+Falls back to label/placeholder/position heuristics if needed.
 
-Product Name (autoid="product_name_text")
+Store selector:
 
-Store selector components
+Finds the store display around div[autoid="store_button"] and Ant Design select components.
 
-Variant name buttons (shadow DOM / iframe-safe)
+Falls back to label-based search on “店铺”.
 
-Description containers (textarea, iframe editors, Quill/CKEditor)
+Description field:
 
-Chinese Conversion Engine
+Supports <textarea>, CKEditor iframes, Quill .ql-editor, and other BigSeller containers.
 
-Uses OpenCC-JS via CDN.
+Safely extracts existing middle content (especially images) and wraps it with header/footer.
 
-Auto-fallback to internal Simplified ↔ Traditional dictionary if CDN fails.
+Variant name popups:
 
-Safety and Compatibility
+Scans main document, same-origin iframes, and open shadowRoots.
 
-Avoids touching unrelated inputs.
+Finds pencil/edit icons and their associated <textarea> popups.
 
-Includes timeouts, visibility checks, DOM traversal, and shadow-root support.
+Chinese Conversion
+Uses OpenCC-JS (full UMD build) via CDN:
 
-Compatible with dynamic page reloads.
+cn → tw converter for Simplified → Traditional
 
-📦 Installation
-Prerequisites
+tw → cn converter for Traditional → Simplified
 
-Chrome or Edge
+If CDN fails, falls back to a small internal mapping dictionary.
 
-Tampermonkey extension
+Safety & Compatibility
+Skips fields with empty values.
+
+Detects SKU fields using attributes and surrounding “SKU” labels to avoid affecting other inputs.
+
+Includes timeouts and retry logic for dynamic rendering.
+
+Works alongside BigSeller’s existing UI without modifying original scripts.
+
+🔧 Installation
+Requirements
+Chrome or Edge browser
+
+Tampermonkey (or compatible userscript manager)
 
 Steps
-
-Install Tampermonkey.
+Install Tampermonkey in your browser.
 
 Create a new userscript.
 
-Paste the full script (.user.js) from this repository.
+Copy the contents of BigSeller Shopee Title Prefix Helper-0.95.user.js from this repository and paste into the editor.
 
-Save and reload any BigSeller Shopee 编辑产品 page.
+Save the script.
 
-🛠 Usage Workflow
+Open or refresh any BigSeller Shopee 编辑产品 page:
 
-Open BigSeller → Shopee 编辑产品页面
+text
+Copy code
+https://www.bigseller.pro/web/listing/shopee/edit/*
+🧭 Usage Workflow
+Open BigSeller → Shopee 编辑产品页面 for a listing.
 
-Wait for the floating panel to appear
+Wait for the floating panel “标题前缀助手” to appear in the bottom-right.
 
-Choose your store (auto-detected)
+Check the detected store name:
+
+If correct, do nothing.
+
+If incorrect, select the correct store from the dropdown.
 
 Click:
 
 应用前缀+描述+MD5
 
-合成SKU (if needed)
+Standardizes the title prefix.
 
-SKU转繁体 (for color/variant names)
+Applies store-specific description header/footer.
 
-Optional: select micro-tuning (尾词调换 / 學生黨平價 etc.)
+Refreshes MD5.
 
-📄 Version History
-v0.95 (Current)
+合成SKU
 
-Added autoid="product_name_text" direct targeting (fixes product title not updating).
+Converts parent SKU to Simplified.
 
-Improved SKU 合成 logic and prefix canonicalization.
+Rewrites all variant SKUs to 父SKU-子SKU.
 
-Full shadow DOM + iframe scan for variant edit buttons.
+SKU转繁体
 
-More robust title detection algorithm.
+Opens each variant-name popup and converts to Traditional.
 
-OpenCC loading fallback refinements.
+Optional: choose an entry in 標題微調選項 to tweak the tail of the title.
 
-🤝 Contributions
+📝 Version History
+v0.95
+Added direct targeting of product title via autoid="product_name_text".
 
-This userscript is tailored for real BigSeller & Shopee seller workflow.
-Issues, suggestions, and pull requests are welcome.
+Fixed SKU转繁体 for BigSeller’s new DOM (including shadow DOM + iframe).
+
+Improved SKU合成逻辑 with accurate SKU field detection and parent-SKU canonicalization to Simplified.
+
+Hardened title detection and description field detection.
+
+Switched OpenCC to full.js bundle and added robust fallback handling.
+
+🤝 Contributing
+This userscript is built around real-world Shopee + BigSeller workflow.
+
+Issues and feature requests are welcome (edge cases, new store configs, UI changes).
+
+Pull requests for new features or DOM fixes are appreciated.
+
+makefile
+Copy code
+::contentReference[oaicite:0]{index=0}
