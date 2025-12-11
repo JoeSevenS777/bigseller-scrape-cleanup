@@ -1,0 +1,201 @@
+Option Explicit
+
+' ====== SETTINGS – change if needed ======
+Const HEADER_ROW As Long = 1      ' header row number
+Const DATA_FIRST_COL As Long = 1  ' first column of your table (1 = column A)
+Const PWD As String = ""          ' sheet password, or "" for none
+' ========================================
+
+' Protect sheet with sorting & filtering allowed
+Sub ProtectSheetForSorting()
+    Dim ws As Worksheet
+    Set ws = ActiveSheet
+
+    ws.Protect Password:=PWD, _
+               UserInterfaceOnly:=True, _
+               AllowSorting:=True, _
+               AllowFiltering:=True
+End Sub
+
+' Create a tiny sort button on each header cell
+Sub SetupHeaderSortButtons()
+    Dim ws As Worksheet
+    Dim lastCol As Long, c As Long
+    Dim shp As Shape
+    Dim headerCell As Range
+    Dim btnWidth As Single, btnHeight As Single
+    Dim btnLeft As Single, btnTop As Single
+
+    Set ws = ActiveSheet
+
+    ' Unprotect while we add buttons
+    On Error Resume Next
+    ws.Unprotect Password:=PWD
+    On Error GoTo 0
+
+    ' Delete old sort buttons (names start with SortBtn_)
+    For Each shp In ws.Shapes
+        ' Delete any existing sort buttons: by name prefix OR by OnAction
+        If Left$(shp.Name, 8) = "SortBtn_" _
+           Or shp.OnAction = "SortByHeaderButton" Then
+            shp.Delete
+        End If
+    Next shp
+
+    ' Find last used header column
+    lastCol = ws.Cells(HEADER_ROW, ws.Columns.Count).End(xlToLeft).Column
+
+    ' Add small ▼ button in each header cell from DATA_FIRST_COL to lastCol
+    For c = DATA_FIRST_COL To lastCol
+        Set headerCell = ws.Cells(HEADER_ROW, c)
+
+        btnWidth = 12
+        btnHeight = headerCell.Height - 4
+        btnLeft = headerCell.Left + headerCell.Width - btnWidth - 1
+        btnTop = headerCell.Top + 2
+
+        Set shp = ws.Shapes.AddShape(msoShapeRectangle, btnLeft, btnTop, btnWidth, btnHeight)
+        With shp
+            .Name = "SortBtn_" & CStr(c)
+            .TextFrame2.TextRange.Text = "▼"
+            .TextFrame2.TextRange.Font.Size = 8
+            .TextFrame2.VerticalAnchor = msoAnchorMiddle
+            .OnAction = "SortByHeaderButton"
+            .Line.Visible = msoFalse
+            .Fill.ForeColor.RGB = RGB(230, 230, 230)
+            .AlternativeText = "ASC"   ' default next sort direction
+        End With
+    Next c
+
+    ' Re-protect sheet
+    ProtectSheetForSorting
+End Sub
+
+' Handle clicks on header buttons
+Sub SortByHeaderButton()
+    Dim ws As Worksheet
+    Dim shp As Shape
+    Dim callerName As String
+    Dim colIndex As Long
+    Dim lastCol As Long, lastRow As Long
+    Dim rng As Range
+    Dim ascending As Boolean
+    Dim state As String
+
+    Dim headerText As String
+    Dim isActionCol As Boolean
+    Dim tmpCol As Long
+    Dim r As Long
+    Dim txt As String
+    Dim c As Long, lrCol As Long
+
+    Dim selectedColor As Long
+    Dim rowColor As Long
+    Dim keyVal As Long
+
+    Set ws = ActiveSheet
+
+    ' Identify clicked shape
+    On Error Resume Next
+    callerName = CStr(Application.Caller)
+    Set shp = ws.Shapes(callerName)
+    On Error GoTo 0
+
+    If shp Is Nothing Then
+        MsgBox "Please click a header sort button.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Determine the column from the button's actual position (more robust than name)
+    colIndex = shp.TopLeftCell.Column
+
+    ' Determine table range: from DATA_FIRST_COL to last used column,
+    ' and from HEADER_ROW to the deepest used row in ANY column.
+    lastCol = ws.Cells(HEADER_ROW, ws.Columns.Count).End(xlToLeft).Column
+
+    lastRow = 0
+    For c = DATA_FIRST_COL To lastCol
+        lrCol = ws.Cells(ws.Rows.Count, c).End(xlUp).Row
+        If lrCol > lastRow Then lastRow = lrCol
+    Next c
+
+    Set rng = ws.Range(ws.Cells(HEADER_ROW, DATA_FIRST_COL), ws.Cells(lastRow, lastCol))
+
+    ' Header text for this column
+    headerText = UCase$(Trim$(CStr(ws.Cells(HEADER_ROW, colIndex).Value)))
+    isActionCol = (headerText = "ACTION")
+
+    ' Toggle ASC/DESC for normal columns
+    state = UCase$(shp.AlternativeText)
+    ascending = (state <> "DESC")
+
+    ' Unprotect sheet for sorting
+    On Error Resume Next
+    ws.Unprotect Password:=PWD
+    On Error GoTo 0
+
+    If isActionCol Then
+        ' ==============================================
+        '  COLOR-LIKE SORT FOR ACTION COLUMN
+        '  User chooses a coloured cell in ACTION column.
+        '  Rows with the same displayed colour are grouped
+        '  to the top using a helper key column.
+        ' ==============================================
+
+        ' Ensure user selected a cell in this column
+        If Intersect(ActiveCell, ws.Columns(colIndex)) Is Nothing Then
+            MsgBox "请先在 ACTION 列选择一个有底色的单元格，然后再点击排序按钮。", vbInformation
+            GoTo Finish
+        End If
+
+        selectedColor = ActiveCell.DisplayFormat.Interior.Color
+        If selectedColor = 0 Or selectedColor = -4142 Then
+            MsgBox "所选单元格没有底色，请先选择一个有底色的单元格。", vbInformation
+            GoTo Finish
+        End If
+
+        ' Helper column immediately to the right of table
+        tmpCol = lastCol + 1
+        ws.Cells(HEADER_ROW, tmpCol).Value = "_key"
+
+        For r = HEADER_ROW + 1 To lastRow
+            rowColor = ws.Cells(r, colIndex).DisplayFormat.Interior.Color
+            If rowColor = selectedColor Then
+                keyVal = 1
+            Else
+                keyVal = 2
+            End If
+            ws.Cells(r, tmpCol).Value = keyVal
+        Next r
+
+        ' Sort entire table by helper key (1 first, then 2)
+        With ws.Range(ws.Cells(HEADER_ROW, DATA_FIRST_COL), ws.Cells(lastRow, tmpCol))
+            .Sort Key1:=ws.Cells(HEADER_ROW + 1, tmpCol), _
+                  Order1:=xlAscending, Header:=xlYes
+        End With
+
+        ' Clear helper values
+        ws.Columns(tmpCol).ClearContents
+
+    Else
+        ' ===== Normal numeric / text sort for other columns =====
+        rng.Sort _
+            Key1:=ws.Cells(HEADER_ROW, colIndex), _
+            Order1:=IIf(ascending, xlAscending, xlDescending), _
+            Header:=xlYes
+
+        ' Toggle direction for next click
+        If ascending Then
+            shp.AlternativeText = "DESC"
+        Else
+            shp.AlternativeText = "ASC"
+        End If
+    End If
+
+Finish:
+    ' Recalc to avoid stale values
+    ws.Calculate
+
+    ' Re-protect sheet
+    ProtectSheetForSorting
+End Sub
