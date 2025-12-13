@@ -3,21 +3,20 @@ Option Explicit
 Private Const DATA_FOLDER As String = _
     "C:\Users\zouzh\Downloads"
 
+' Always subtract this offset from Available Stock values (no exemptions)
+' If you ever need 1,000 instead of 10,000, change this constant.
+Private Const AVAILABLE_STOCK_OFFSET As Double = 10000
+
+' Sheet names to update (both will be processed every run if they exist)
+Private SHEETS_TO_UPDATE As Variant
+
 
 Public Sub UpdateInventoryNEW()
     Dim wbInv As Workbook
-    Dim wsInv As Worksheet
     Dim wbSrc As Workbook
     Dim wsSrc As Worksheet
 
-    Dim invWasProtected As Boolean
     Dim latestPath As String
-
-    Dim skuColInv As Long
-    Dim availColInv As Long
-    Dim onwayColInv As Long
-    Dim ordAllocColInv As Long
-    Dim dailySalesColInv As Long
 
     Dim skuColSrc As Long
     Dim availColSrc As Long
@@ -25,7 +24,6 @@ Public Sub UpdateInventoryNEW()
     Dim ordAllocColSrc As Long
     Dim dailySalesColSrc As Long
 
-    Dim lastRowInv As Long
     Dim lastRowSrc As Long
     Dim r As Long
     Dim sku As String
@@ -38,12 +36,14 @@ Public Sub UpdateInventoryNEW()
     Dim scrn As Boolean
     Dim calc As XlCalculation
     Dim evt As Boolean
-    Dim v As Double
+
+    Dim wsInv As Worksheet
+    Dim i As Long
 
     On Error GoTo ErrHandler
 
     Set wbInv = ThisWorkbook
-    Set wsInv = wbInv.ActiveSheet   ' 当前库存清单工作表
+    SHEETS_TO_UPDATE = Array("采菁", "萌睫")
 
     ' -------- Speed up --------
     scrn = Application.ScreenUpdating
@@ -53,14 +53,6 @@ Public Sub UpdateInventoryNEW()
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
     Application.EnableEvents = False
-
-    ' -------- If sheet is protected (no password), temporarily unprotect --------
-    invWasProtected = wsInv.ProtectContents
-    If invWasProtected Then
-        On Error Resume Next
-        wsInv.Unprotect Password:=""
-        On Error GoTo ErrHandler
-    End If
 
     ' -------- 1) Find latest data workbook --------
     latestPath = FindLatestWorkbook(DATA_FOLDER)
@@ -88,22 +80,7 @@ Public Sub UpdateInventoryNEW()
 
     Set wsSrc = wbSrc.Worksheets(1)  ' 数据文件第一张表，无论英/中文
 
-    ' -------- 2) Inventory List headers (SKU + 4 columns) --------
-    skuColInv = FindHeaderByCandidates(wsInv, Array("sku"))
-    availColInv = FindHeaderByCandidates(wsInv, Array("available stock"))
-    onwayColInv = FindHeaderByCandidates(wsInv, Array("on the way"))
-    ordAllocColInv = FindHeaderByCandidates(wsInv, Array("order allocated"))
-    dailySalesColInv = FindHeaderByCandidates(wsInv, Array("daily sales"))
-
-    If skuColInv = 0 Or availColInv = 0 Or onwayColInv = 0 _
-       Or ordAllocColInv = 0 Or dailySalesColInv = 0 Then
-        MsgBox "在当前库存清单中未找到必要表头：" & vbCrLf & _
-               "SKU / Available Stock / on the way / Order Allocated / Daily Sales", _
-               vbCritical
-        GoTo CleanExit
-    End If
-
-' -------- 3) Source data headers (English / Chinese) --------
+    ' -------- 2) Source data headers (English / Chinese) --------
     skuColSrc = FindHeaderByCandidates(wsSrc, Array("sku name", "sku编号"))
     availColSrc = FindHeaderByCandidates(wsSrc, _
                         Array("available for whole warehouse", "整仓可用", _
@@ -115,7 +92,6 @@ Public Sub UpdateInventoryNEW()
     dailySalesColSrc = FindHeaderByCandidates(wsSrc, _
                         Array("forecasted daily sales", "预测日销量"))
 
-
     If skuColSrc = 0 Or availColSrc = 0 Or onwayColSrc = 0 _
        Or ordAllocColSrc = 0 Or dailySalesColSrc = 0 Then
         MsgBox "在最新库存数据文件中未找到必要表头：" & vbCrLf & _
@@ -123,7 +99,7 @@ Public Sub UpdateInventoryNEW()
         GoTo CleanExit
     End If
 
-    ' -------- 4) Load source data into dictionaries (by SKU) --------
+    ' -------- 3) Load source data into dictionaries (by SKU) --------
     Set dictAvail = CreateObject("Scripting.Dictionary")
     Set dictOnWay = CreateObject("Scripting.Dictionary")
     Set dictOrder = CreateObject("Scripting.Dictionary")
@@ -132,7 +108,6 @@ Public Sub UpdateInventoryNEW()
     dictOnWay.CompareMode = vbTextCompare
     dictOrder.CompareMode = vbTextCompare
     dictDaily.CompareMode = vbTextCompare
-
 
     lastRowSrc = wsSrc.Cells(wsSrc.Rows.Count, skuColSrc).End(xlUp).Row
     If lastRowSrc < 2 Then GoTo CleanExit
@@ -147,57 +122,21 @@ Public Sub UpdateInventoryNEW()
         End If
     Next r
 
-    ' -------- 5) Clear old values in Inventory List --------
-    lastRowInv = wsInv.Cells(wsInv.Rows.Count, skuColInv).End(xlUp).Row
-    If lastRowInv < 2 Then GoTo CleanExit
+    ' -------- 4) Update both target sheets --------
+    For i = LBound(SHEETS_TO_UPDATE) To UBound(SHEETS_TO_UPDATE)
+        Set wsInv = Nothing
+        On Error Resume Next
+        Set wsInv = wbInv.Worksheets(CStr(SHEETS_TO_UPDATE(i)))
+        On Error GoTo ErrHandler
 
-    wsInv.Range(wsInv.Cells(2, availColInv), wsInv.Cells(lastRowInv, availColInv)).ClearContents
-    wsInv.Range(wsInv.Cells(2, onwayColInv), wsInv.Cells(lastRowInv, onwayColInv)).ClearContents
-    wsInv.Range(wsInv.Cells(2, ordAllocColInv), wsInv.Cells(lastRowInv, ordAllocColInv)).ClearContents
-    wsInv.Range(wsInv.Cells(2, dailySalesColInv), wsInv.Cells(lastRowInv, dailySalesColInv)).ClearContents
-
-    ' -------- 6) Fill columns by SKU --------
-    For r = 2 To lastRowInv
-        sku = Trim$(CStr(wsInv.Cells(r, skuColInv).Value))
-        If sku <> "" Then
-            If dictAvail.Exists(sku) Then
-                wsInv.Cells(r, availColInv).Value = dictAvail(sku)
-            End If
-            If dictOnWay.Exists(sku) Then
-                wsInv.Cells(r, onwayColInv).Value = dictOnWay(sku)
-            End If
-            If dictOrder.Exists(sku) Then
-                wsInv.Cells(r, ordAllocColInv).Value = dictOrder(sku)
-            End If
-            If dictDaily.Exists(sku) Then
-                wsInv.Cells(r, dailySalesColInv).Value = dictDaily(sku)
-            End If
+        If Not wsInv Is Nothing Then
+            UpdateOneInventorySheet wsInv, dictAvail, dictOnWay, dictOrder, dictDaily
         End If
-    Next r
-
-    ' -------- 7) Subtract 10000 from Available Stock (only when >= 10000) --------
-    For r = 2 To lastRowInv
-        If IsNumeric(wsInv.Cells(r, availColInv).Value) Then
-            v = CDbl(wsInv.Cells(r, availColInv).Value)
-            If v >= 10000 Then
-                wsInv.Cells(r, availColInv).Value = v - 10000
-            End If
-        End If
-    Next r
-
-    ' Recalculate this sheet so formulas using these values are up to date
-    wsInv.Calculate
-
-    MsgBox "库存数据已根据最新文件更新完成。", vbInformation
+    Next i
 
 CleanExit:
     On Error Resume Next
     If Not wbSrc Is Nothing Then wbSrc.Close SaveChanges:=False
-
-    If invWasProtected Then
-        wsInv.Protect Password:="", UserInterfaceOnly:=True, _
-                     AllowSorting:=True, AllowFiltering:=True
-    End If
 
     Application.ScreenUpdating = scrn
     Application.Calculation = calc
@@ -208,6 +147,135 @@ CleanExit:
 ErrHandler:
     MsgBox "UpdateInventoryNEW 出错: " & Err.Number & " - " & Err.Description, vbCritical
     Resume CleanExit
+End Sub
+
+
+' ===== Main per-sheet updater =======================================
+
+Private Sub UpdateOneInventorySheet(ByVal wsInv As Worksheet, _
+                                   ByVal dictAvail As Object, _
+                                   ByVal dictOnWay As Object, _
+                                   ByVal dictOrder As Object, _
+                                   ByVal dictDaily As Object)
+
+    Dim invWasProtected As Boolean
+
+    Dim skuColInv As Long
+    Dim availColInv As Long
+    Dim onwayColInv As Long
+    Dim ordAllocColInv As Long
+    Dim dailySalesColInv As Long
+
+    Dim lastRowInv As Long
+    Dim r As Long
+    Dim sku As String
+    Dim v As Double
+
+    ' -------- If sheet is protected (no password), temporarily unprotect --------
+    invWasProtected = wsInv.ProtectContents
+    If invWasProtected Then
+        On Error Resume Next
+        wsInv.Unprotect Password:=""
+        On Error GoTo 0
+    End If
+
+    ' -------- Headers (SKU + 4 columns) --------
+    skuColInv = FindHeaderByCandidates(wsInv, Array("sku"))
+    availColInv = FindHeaderByCandidates(wsInv, Array("available stock"))
+    onwayColInv = FindHeaderByCandidates(wsInv, Array("on the way"))
+    ordAllocColInv = FindHeaderByCandidates(wsInv, Array("order allocated"))
+    dailySalesColInv = FindHeaderByCandidates(wsInv, Array("daily sales"))
+
+    If skuColInv = 0 Or availColInv = 0 Or onwayColInv = 0 _
+       Or ordAllocColInv = 0 Or dailySalesColInv = 0 Then
+        MsgBox "在工作表 [" & wsInv.Name & "] 中未找到必要表头：" & vbCrLf & _
+               "SKU / Available Stock / on the way / Order Allocated / Daily Sales", vbCritical
+        GoTo SheetCleanExit
+    End If
+
+    ' -------- Create/refresh the Update button near SKU header --------
+    EnsureUpdateButton wsInv, skuColInv
+
+    ' -------- Determine range --------
+    lastRowInv = wsInv.Cells(wsInv.Rows.Count, skuColInv).End(xlUp).Row
+    If lastRowInv < 2 Then GoTo SheetCleanExit
+
+    ' -------- Clear old values --------
+    wsInv.Range(wsInv.Cells(2, availColInv), wsInv.Cells(lastRowInv, availColInv)).ClearContents
+    wsInv.Range(wsInv.Cells(2, onwayColInv), wsInv.Cells(lastRowInv, onwayColInv)).ClearContents
+    wsInv.Range(wsInv.Cells(2, ordAllocColInv), wsInv.Cells(lastRowInv, ordAllocColInv)).ClearContents
+    wsInv.Range(wsInv.Cells(2, dailySalesColInv), wsInv.Cells(lastRowInv, dailySalesColInv)).ClearContents
+
+    ' -------- Fill columns by SKU --------
+    For r = 2 To lastRowInv
+        sku = Trim$(CStr(wsInv.Cells(r, skuColInv).Value))
+        If sku <> "" Then
+            If dictAvail.Exists(sku) Then wsInv.Cells(r, availColInv).Value = dictAvail(sku)
+            If dictOnWay.Exists(sku) Then wsInv.Cells(r, onwayColInv).Value = dictOnWay(sku)
+            If dictOrder.Exists(sku) Then wsInv.Cells(r, ordAllocColInv).Value = dictOrder(sku)
+            If dictDaily.Exists(sku) Then wsInv.Cells(r, dailySalesColInv).Value = dictDaily(sku)
+        End If
+    Next r
+
+    ' -------- Always subtract offset from Available Stock (no exemptions) --------
+    For r = 2 To lastRowInv
+        If IsNumeric(wsInv.Cells(r, availColInv).Value) Then
+            v = CDbl(wsInv.Cells(r, availColInv).Value)
+            wsInv.Cells(r, availColInv).Value = v - AVAILABLE_STOCK_OFFSET
+        End If
+    Next r
+
+    ' Recalculate this sheet so formulas using these values are up to date
+    wsInv.Calculate
+
+SheetCleanExit:
+    ' Restore protection if needed
+    If invWasProtected Then
+        On Error Resume Next
+        wsInv.Protect Password:="", UserInterfaceOnly:=True, _
+                     AllowSorting:=True, AllowFiltering:=True
+        On Error GoTo 0
+    End If
+End Sub
+
+
+' ===== UI helper: create a button near SKU header ===================
+
+Private Sub EnsureUpdateButton(ByVal ws As Worksheet, ByVal skuCol As Long)
+    Dim btnName As String
+    Dim shp As Shape
+    Dim leftCell As Range
+
+    btnName = "btnUpdateInventory"
+
+    ' Determine target position: left side of SKU header
+    If skuCol > 1 Then
+        Set leftCell = ws.Cells(1, skuCol - 1)
+    Else
+        Set leftCell = ws.Cells(1, skuCol)
+    End If
+
+    ' Remove any existing button with the same name
+    On Error Resume Next
+    ws.Shapes(btnName).Delete
+    On Error GoTo 0
+
+    ' Add a simple rectangle button
+Set shp = ws.Shapes.AddShape(msoShapeRoundedRectangle, _
+                            leftCell.Left + 2, leftCell.Top + 2, _
+                            Application.Min(60, leftCell.Width - 6), _
+                            Application.Min(20, leftCell.Height - 6))
+
+
+    With shp
+        .Name = btnName
+        .TextFrame2.TextRange.Text = "Update"
+        .TextFrame2.TextRange.Font.Size = 12
+        .TextFrame2.VerticalAnchor = msoAnchorMiddle
+        .TextFrame2.TextRange.ParagraphFormat.Alignment = msoAlignCenter
+        .OnAction = "UpdateInventoryNEW"
+        .Placement = xlMoveAndSize
+    End With
 End Sub
 
 
@@ -313,9 +381,5 @@ Private Function NzToZero(v As Variant) As Double
         NzToZero = CDbl(Val(CStr(v)))
     End If
 End Function
-
-
-
-
 
 
