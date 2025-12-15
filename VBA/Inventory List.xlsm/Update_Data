@@ -43,7 +43,7 @@ Public Sub UpdateInventoryNEW()
     On Error GoTo ErrHandler
 
     Set wbInv = ThisWorkbook
-    SHEETS_TO_UPDATE = Array("采菁", "萌睫")
+    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "Flortte")
 
     ' -------- Speed up --------
     scrn = Application.ScreenUpdating
