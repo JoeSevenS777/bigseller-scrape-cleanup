@@ -70,7 +70,7 @@ This guarantees high performance even with large datasets.
 
 ### 4. Updates multiple inventory sheets
 
-Each run automatically updates **both** of the following sheets (if present):
+Each run automatically updates **three** of the following sheets (if present):
 
 * `采菁`
 * `萌睫`
