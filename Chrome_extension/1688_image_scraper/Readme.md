@@ -1,188 +1,136 @@
-# 1688 Image Scraper (Main / SKU / Details)
+# 1688 Image Scraper (Main / SKU / Details / Video)
 
-A Chrome (Manifest V3) extension for 1688 product detail pages that reliably downloads product images and videos into a clean, structured folder layout.  
-This version is built strictly on actual 1688 page behavior, not assumptions.
-
----
-
-## Features
-
-- Base folder named after the product title (never supplier / shop name)
-- Image folders:
-  - main/ – main gallery images (SKU images excluded)
-  - sku/ – SKU / variant images
-  - details/ – description (图文详情) images
-- Product video download (if present) into the base folder
-- Minimum image size filter (default ≥ 500 × 500)
-- No duplication between main/ and sku/
-- SKU images named using real SKU names from 1688
-- Sequential SKU prefixes (01_, 02_, …) matching page order
-- Supports .jpg, .png, .webp
-- Stable DOM + embedded-data parsing (no fragile hacks)
+A Chrome Extension (Manifest V3) designed to scrape and download all product media from **1688 product detail pages**, with correct SKU handling, clean folder structure, and optional video support.
 
 ---
 
-## Output Structure
+## Core Capabilities
 
-Product Title/
-  ├─ main/
-  │   ├─ 001.jpg
-  │   ├─ 002.webp
-  │   └─ ...
-  ├─ sku/
-  │   ├─ 01_01#自然黑.jpg
-  │   ├─ 02_02#自然棕.jpg
-  │   └─ ...
-  ├─ details/
-  │   ├─ 001.jpg
-  │   └─ ...
-  └─ video.mp4   (if available)
+- Base folder is named **strictly after the product title** (never the shop name)
+- Automatic suffixing if the same title already exists:
+  - `Product Title`
+  - `Product Title_01`
+  - `Product Title_02`
+- Subfolder structure:
+  - `main/` — main gallery images
+  - `sku/` — SKU option images (ordered and named as on page)
+  - `details/` — description / detail images
+- Product video (if present) is downloaded into the **base folder**
+- Minimum image size filter (default **450px**)
+- Duplicate removal between `main/` and `sku/` (SKU images take priority)
+- Spec-name agnostic SKU parsing:
+  - Works with `颜色分类`, `规格`, `外观`, `色号`, `尺寸`, etc.
+- Non-combinatorial SKU logic:
+  - Only the **first image-bearing SKU dimension** is used
 
 ---
 
-## Installation
+## Folder Output Example
 
-1. Unzip the extension package
-2. Open Chrome and go to chrome://extensions
-3. Enable Developer mode
-4. Click Load unpacked
+```
+Gege bear 晶透钻光镜面唇釉水光显白不易沾杯女秋冬口红跨境彩妆/
+  main/
+    001.jpg
+    002.jpg
+    003.jpg
+  sku/
+    01_01#自然黑.jpg
+    02_02#自然棕.jpg
+  details/
+    001.jpg
+    002.jpg
+    003.jpg
+  video.mp4
+```
+
+---
+
+## Installation (Developer Mode)
+
+1. Download and unzip the extension folder
+2. Open Chrome and navigate to `chrome://extensions`
+3. Enable **Developer mode**
+4. Click **Load unpacked**
 5. Select the extension folder
-6. Open a detail.1688.com/offer/... product page
-7. Click Scrape & Download
-
----
-
-## Core Logic
-
-### Product Title (Folder Name)
-
-The base folder name is resolved in priority order:
-
-1. Embedded JSON in inline script blocks (offerTitle, subject)
-2. Meta tag: property="og:title"
-3. H1 title
-4. document.title (with “- 阿里巴巴” stripped)
-
-Supplier / shop keywords such as 公司, 商行, 旗舰店, 选品中心 are filtered out.
-
----
-
-### Details Images (图文详情)
-
-1688 does not render detail images directly in the DOM.
-
-Instead, pages embed a URL similar to:
-
-  "detailUrl": "https://itemcdn.tmall.com/1688offer/xxxx.html"
-
-Process:
-
-1. Scan inline script blocks
-2. Extract detailUrl
-3. Fetch that HTML directly
-4. Parse img tags
-5. Filter by actual image dimensions
-
-This is the only reliable way to get description images on 1688.
-
----
-
-### Main Images
-
-- Collected from the product image gallery
-- Thumbnail URLs are normalized to original size
-- Images smaller than minSize are discarded
-- Any image used by a SKU is removed from main/
-
-Result:
-main/ contains only true non-SKU gallery images.
-
----
-
-### SKU Images (Named, Ordered, De-duplicated)
-
-SKU name source:
-
-SKU data is extracted from embedded JSON (skuProps), not from DOM labels, for example:
-
-  name: "01#自然黑"
-  imageUrl: "https://..."
-
-This avoids polluted names like inventory or price text.
-
-Ordering:
-
-- SKU images are processed in the same order as skuProps
-- Each file gets a two-digit prefix: 01_, 02_, …
-
-Deduplication:
-
-- If multiple SKUs reference the same image URL, the image is downloaded once
-- SKU images are removed from main/ automatically
-
----
-
-### Product Video
-
-The extension detects video via:
-
-- video / source elements
-- Embedded JSON fields (videoUrl, wirelessVideo)
-- Direct media URLs (.mp4, .m3u8, .webm, .mov)
-
-If found:
-
-- Saved as video.*
-- Placed in the base product folder
-
----
-
-### Image Size Filtering
-
-- Images are loaded via JavaScript Image()
-- Checked using naturalWidth and naturalHeight
-- Both dimensions must meet minSize
-- Prevents thumbnails, icons, and placeholders
-
----
-
-## Configuration
-
-- Min size (px): default 500
-- Applies to width and height
-- Adjustable in the popup UI
-
----
-
-## Design Principles
-
-- Use embedded data first, DOM second
-- Match real 1688 data flow
-- No XHR / fetch interception
-- No iframe brute-force crawling
-- No SKU auto-click simulation
-
-This keeps the extension stable, predictable, and maintainable.
-
----
-
-## Notes
-
-- Some products genuinely have no SKU images
-- Some products genuinely have no detail images
-- Some products have no video
-- The extension reflects exactly what the seller provides
 
 ---
 
 ## Usage
 
-For personal or internal business use.  
-Respect 1688 / Alibaba terms and local regulations.
+1. Open a 1688 product detail page
+2. Click the extension icon
+3. Set the minimum image size (default 450)
+4. Click **Scrape & Download**
+5. Assets will be downloaded to your Chrome download directory
 
 ---
 
-## Summary
+## Architecture Overview
 
-This extension was built by iterating against real 1688 pages, not theory.  
-It prioritizes correctness and stability over shortcuts.
+```
+popup.html / popup.js
+        ↓
+service_worker.js   (background orchestrator)
+        ↓
+content.js          (page-context extractor)
+```
+
+- **popup.js**
+  - User interface
+  - Sends scrape command
+  - Displays progress logs
+
+- **content.js**
+  - Runs inside page context
+  - Extracts:
+    - product title
+    - main images
+    - SKU images
+    - detail images
+    - video URL (if any)
+  - JSON-first strategy with DOM fallback
+
+- **service_worker.js**
+  - Applies size filtering
+  - Deduplicates images (SKU > main)
+  - Resolves base folder naming + suffixing
+  - Executes downloads via `chrome.downloads.download`
+
+---
+
+## Core Logic Summary
+
+### Product Title Resolution
+Priority order:
+1. Embedded page JSON (`offerTitle`, `subject`, etc.)
+2. `og:title` meta tag
+3. Product title DOM nodes
+4. `document.title` fallback (sanitized)
+
+### SKU Image Logic
+- Parses SKU metadata from embedded JSON
+- Identifies the **first SKU dimension containing images**
+- Preserves on-page order
+- Ignores all other dimensions intentionally
+
+### Video Handling
+- Detects real video URLs only (`mp4`, `webm`, `m3u8`)
+- Ignores `blob:` and HTML URLs
+- If no valid video exists, **nothing is downloaded**
+- Prevents creation of `video.htm` or placeholder files
+
+---
+
+## Known Limitations
+
+- Products without SKU images will have an empty `sku/` folder
+- Lazily-loaded detail images may not always resolve
+- Multi-dimension SKU combinations are intentionally ignored
+
+---
+
+## Status
+
+- Stable
+- Production-ready
+- Tested across cosmetics, tools, accessories, and mixed SKU types
