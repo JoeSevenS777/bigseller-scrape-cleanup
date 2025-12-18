@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "1688 Image Scraper (Main/SKU/Details)",
+  "version": "1.0.1",
+  "description": "Create product folder with main/sku/details and download 1688 product images >= min size. Extracts details via detailUrl/iframes.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "1688 Image Scraper"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://detail.1688.com/*",
+    "https://*.1688.com/*",
+    "https://*.alicdn.com/*",
+    "https://*.alibaba.com/*",
+    "https://itemcdn.tmall.com/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://detail.1688.com/offer/*",
+        "https://detail.1688.com/offer/*.html*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
