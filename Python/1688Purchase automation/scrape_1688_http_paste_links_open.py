@@ -2,6 +2,8 @@ import os
 import re
 import json
 import time
+import sys
+import subprocess
 import requests
 import pandas as pd
 
@@ -235,12 +237,28 @@ def scrape_one_product(session: requests.Session, url: str) -> list[dict]:
     return rows
 
 
+
+def open_file_with_default_app(filepath: str) -> None:
+    """Open a file with the OS default application (best-effort)."""
+    try:
+        if not filepath or not os.path.exists(filepath):
+            return
+        if sys.platform.startswith("win"):
+            os.startfile(filepath)  # type: ignore[attr-defined]
+        elif sys.platform.startswith("darwin"):
+            subprocess.run(["open", filepath], check=False)
+        else:
+            subprocess.run(["xdg-open", filepath], check=False)
+    except Exception as e:
+        print(f"[WARN] 已生成文件，但无法自动打开：{e}")
+
+
 # ======================================================================
 # MAIN PIPELINE
 # ======================================================================
 
 def find_latest_workbook() -> str:
-    """在工作目录中找到最新的 .xlsx 文件。"""
+    """在工作目录中找到最新的 .xlsx 文件（兼容旧流程，可选用）。"""
     candidates: list[str] = []
     for fn in os.listdir(BASE_DIR):
         if fn.lower().endswith(".xlsx") and not fn.startswith("~$"):
@@ -254,48 +272,158 @@ def find_latest_workbook() -> str:
     return max(candidates, key=os.path.getmtime)
 
 
+def read_links_from_stdin() -> list[str]:
+    """    交互式读取商品链接：
+      - 支持一次性粘贴多行（每行一个链接）
+      - 以“空行 + 回车”结束输入
+      - 会做去重与简单清洗
+    """
+    import sys
+
+    print("\n请粘贴 1688 商品链接（每行一个）。")
+    print("粘贴完成后，请再输入一个空行并回车结束。\n")
+
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    while True:
+        line = sys.stdin.readline()
+        if not line:  # EOF
+            break
+        line = line.strip()
+        if not line:
+            break
+
+        # 允许一行里粘贴多个链接（用空格分隔）
+        parts = [p.strip() for p in re.split(r"\s+", line) if p.strip()]
+        for p in parts:
+            u = p.strip().strip('"').strip("'")
+            if not u:
+                continue
+            if not (u.startswith("http://") or u.startswith("https://")):
+                # 容错：用户可能粘贴了不带协议的链接/无关文本
+                continue
+            if u not in seen:
+                seen.add(u)
+                urls.append(u)
+
+    return urls
+
+
+def build_output_path() -> str:
+    """输出到 ID_Scrape 目录，文件名不依赖输入 Excel。"""
+    from datetime import datetime
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_name = f"pasted_links_{ts}(done).xlsx"
+    return os.path.join(BASE_DIR, out_name)
+
+
 def main():
+    import argparse
+
     print("=== 1688 HTTP ID Scrape (No Selenium) ===")
     print("版本：", SCRIPT_VERSION)
     print("工作目录：", BASE_DIR)
 
-    try:
-        wb_path = find_latest_workbook()
-    except Exception as e:
-        print(e)
+    parser = argparse.ArgumentParser(
+        description="1688 商品 SKU/SpecID 抓取（HTTP 方式）\n默认：交互式粘贴链接。\n可选：从 Excel 读取（旧流程）。",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument(
+        "--excel",
+        nargs="?",
+        const="__AUTO__",
+        help="从 Excel 读取链接（旧流程）。不带参数则自动取工作目录最新的 .xlsx。\n示例：python scrape_1688_http.py --excel\n示例：python scrape_1688_http.py --excel input.xlsx",
+    )
+    args = parser.parse_args()
+
+    # 1) 获取待处理链接
+    urls: list[str] = []
+
+    if args.excel is not None:
+        # 旧流程：从 Excel 读取
+        try:
+            if args.excel == "__AUTO__":
+                wb_path = find_latest_workbook()
+            else:
+                wb_path = args.excel
+                if not os.path.isabs(wb_path):
+                    wb_path = os.path.join(BASE_DIR, wb_path)
+
+            print("待处理工作簿：")
+            print("   ", wb_path)
+
+            df = pd.read_excel(wb_path, dtype=str)
+            if "商品链接" not in df.columns:
+                raise SystemExit("❌ Excel 缺少列：商品链接")
+
+            for _, row in df.iterrows():
+                u = str(row.get("商品链接", "")).strip()
+                if u:
+                    urls.append(u)
+
+        except Exception as e:
+            print(f"[WARN] 读取 Excel 失败：{e}")
+            print("[WARN] 将退出，不生成输出文件。\n")
+            return
+    else:
+        # 新流程：交互式粘贴链接
+        urls = read_links_from_stdin()
+
+    # 清洗/去重
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for u in urls:
+        u = str(u).strip()
+        if not u:
+            continue
+        if u not in seen:
+            seen.add(u)
+            cleaned.append(u)
+
+    if not cleaned:
+        print("[WARN] 未提供任何有效商品链接。请重新运行并粘贴链接。\n")
         return
 
-    print("待处理工作簿：")
-    print("   ", wb_path)
-
-    df = pd.read_excel(wb_path, dtype=str)
-    if "商品链接" not in df.columns:
-        raise SystemExit("❌ Excel 缺少列：商品链接")
-
+    # 2) 抓取
     session = requests.Session()
     all_rows: list[dict] = []
+    failed_urls: list[str] = []
 
-    for idx, row in df.iterrows():
-        url = str(row.get("商品链接", "")).strip()
-        if not url:
-            continue
+    for url in cleaned:
         rows = scrape_one_product(session, url)
-        all_rows.extend(rows)
+        if rows:
+            all_rows.extend(rows)
+        else:
+            failed_urls.append(url)
 
+    # 3) 输出或告警
     if not all_rows:
-        print("[WARN] 未获得任何 SKU 数据，不输出文件。")
+        print("\n[WARN] 未获得任何 SKU 数据，不输出文件。")
+
+        # 给出失败链接列表（避免太长，最多 20 条）
+        if failed_urls:
+            print("[WARN] 可能失败的链接（最多显示 20 条）：")
+            for u in failed_urls[:20]:
+                print("  -", u)
+            if len(failed_urls) > 20:
+                print(f"  ... 以及另外 {len(failed_urls) - 20} 条")
+
+        print("\n建议排查：Cookie 是否过期、链接是否需要登录、或查看 debug_html 中保存的页面源码。\n")
         return
 
     out_df = pd.DataFrame(all_rows)
-    out_name = os.path.splitext(wb_path)[0] + "(done).xlsx"
-    out_df.to_excel(out_name, index=False)
-    print("\n全部处理完成。输出：", out_name)
+    out_path = build_output_path()
+    out_df.to_excel(out_path, index=False)
 
-    try:
-        os.startfile(out_name)
-    except Exception:
-        pass
+    print("\n全部处理完成。输出：", out_path)
 
+    # 如果存在失败链接，给出提醒（仍然输出成功部分）
+    if failed_urls:
+        print(f"[WARN] 有 {len(failed_urls)} 个链接未抓取到数据（已忽略）。")
 
+    open_file_with_default_app(out_path)
 if __name__ == "__main__":
     main()
+
